@@ -1,6 +1,7 @@
 streamlit
-pypdf==4.2.0
+pypdf
 python-docx
 faiss-cpu
 sentence-transformers
 transformers
+
