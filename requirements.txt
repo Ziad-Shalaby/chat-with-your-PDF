@@ -1,0 +1,6 @@
+streamlit
+pypdf==4.2.0
+python-docx
+faiss-cpu
+sentence-transformers
+transformers
