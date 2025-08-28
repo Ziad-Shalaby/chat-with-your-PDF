@@ -12,7 +12,6 @@ from pypdf import PdfReader
 import docx
 
 # -------------------------- Huggingface Key -------------------------
-hf_token = st.secrets.get("HUGGINGFACEHUB_API_TOKEN", None)
 hf_token = st.secrets.get("HUGGINGFACEHUB_API_TOKEN", "")
 # --------------------------- Config / Page ---------------------------
 st.set_page_config(page_title="ChatWithYourPDF", page_icon="📄", layout="wide")
@@ -292,7 +291,7 @@ if user_msg:
         if not st.session_state.vector_ready:
             st.warning("Please upload a document first.")
         elif not hf_token:
-            st.warning("Please enter your Hugging Face token in the sidebar.")
+    st.error("Hugging Face token not found. Please add it to your Streamlit secrets.")
         else:
             with st.spinner("Thinking..."):
                 try:
@@ -320,6 +319,7 @@ if user_msg:
                 with st.expander("🔎 Retrieved chunks (context)"):
                     for i, r in enumerate(retrieved, 1):
                         st.markdown(f"**{i}. (score={r['score']:.3f})**\n\n{r['text']}")
+
 
 
 
