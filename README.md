@@ -52,9 +52,6 @@ chat-with-your-pdf/
     └── secrets.toml       # API token storage
 ```
 
-## License
-This project is licensed under the MIT License.
-
 ## Contributing
 Contributions are welcome! Feel free to fork the repository, submit pull requests, or report issues.
 
