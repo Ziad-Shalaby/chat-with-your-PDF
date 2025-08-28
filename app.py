@@ -226,7 +226,6 @@ with st.sidebar:
         index=0,
     )
 
-    hf_token = st.text_input("Hugging Face Token (hf_...)", type="password")
     chunk_size = st.slider("Chunk size (words)", 80, 400, 120, 10)
     overlap = st.slider("Overlap (words)", 10, 200, 30, 5)
     top_k = st.slider("Top-K retrieved chunks", 1, 10, 3, 1)
@@ -319,6 +318,7 @@ if user_msg:
                 with st.expander("🔎 Retrieved chunks (context)"):
                     for i, r in enumerate(retrieved, 1):
                         st.markdown(f"**{i}. (score={r['score']:.3f})**\n\n{r['text']}")
+
 
 
 
