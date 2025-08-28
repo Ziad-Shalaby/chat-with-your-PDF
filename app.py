@@ -12,8 +12,8 @@ from pypdf import PdfReader
 import docx
 
 # --------------------------- Config / Page ---------------------------
-st.set_page_config(page_title="ChatWithYourPDF", page_icon="🧠", layout="wide")
-st.title("🧠 Chat-With-Your-PDF (Conversational)")
+st.set_page_config(page_title="ChatWithYourPDF", page_icon="📄", layout="wide")
+st.title("📄💬 Chat-With-Your-PDF (Conversational)")
 st.caption("Upload a PDF / DOCX / TXT, then ask questions grounded in the document. Uses a conversational model via Hugging Face Inference API.")
 
 # --------------------------- Helpers: Embedding & Chunking ---------------------------
@@ -319,5 +319,6 @@ if user_msg:
                 with st.expander("🔎 Retrieved chunks (context)"):
                     for i, r in enumerate(retrieved, 1):
                         st.markdown(f"**{i}. (score={r['score']:.3f})**\n\n{r['text']}")
+
 
 
