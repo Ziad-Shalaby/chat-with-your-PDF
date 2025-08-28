@@ -11,12 +11,13 @@ from sentence_transformers import SentenceTransformer
 from pypdf import PdfReader
 import docx
 
-# -------------------------- Huggingface Key -------------------------
-hf_token = st.secrets.get("HUGGINGFACEHUB_API_TOKEN", "")
 # --------------------------- Config / Page ---------------------------
 st.set_page_config(page_title="ChatWithYourPDF", page_icon="📄", layout="wide")
 st.title("📄💬 Chat-With-Your-PDF (Conversational)")
 st.caption("Upload a PDF / DOCX / TXT, then ask questions grounded in the document. Uses a conversational model via Hugging Face Inference API.")
+
+# --------------------------- Load Hugging Face Token ---------------------------
+hf_token = st.secrets.get("HUGGINGFACEHUB_API_TOKEN", "")
 
 # --------------------------- Helpers: Embedding & Chunking ---------------------------
 @st.cache_resource(show_spinner=False)
@@ -25,7 +26,6 @@ def get_embedder(model_name: str = "sentence-transformers/all-MiniLM-L6-v2") -> 
 
 
 def read_uploaded_file(uploaded_file) -> Dict[str, Any]:
-    """Return a dict with doc_id, source, and extracted text."""
     ext = Path(uploaded_file.name).suffix.lower()
     text = ""
 
@@ -36,7 +36,6 @@ def read_uploaded_file(uploaded_file) -> Dict[str, Any]:
             text += page_text + "\n"
 
     elif ext == ".txt":
-        # uploaded_file.read() returns bytes
         try:
             text = uploaded_file.read().decode("utf-8", errors="ignore")
         except Exception:
@@ -60,7 +59,6 @@ def clean_and_split_sentences(text: str) -> List[str]:
 
 
 def chunk_text(doc: Dict[str, Any], chunk_size: int = 120, overlap: int = 30) -> List[Dict[str, Any]]:
-    """Create overlapping word-based chunks (returns list of chunk dicts)."""
     sentences = clean_and_split_sentences(doc["text"]) if doc.get("text") else []
     words = " ".join(sentences).split()
     chunks, start, cid = [], 0, 0
@@ -88,9 +86,7 @@ def build_vector_store(chunks: List[Dict[str, Any]], embedder: SentenceTransform
     texts = [c["text"] for c in chunks]
     if not texts:
         raise ValueError("No text chunks to index.")
-    # sentence-transformers encode -> numpy
     embeddings = embedder.encode(texts, convert_to_numpy=True, show_progress_bar=False)
-    # normalize to use inner product as cosine-sim
     faiss.normalize_L2(embeddings)
     dim = embeddings.shape[1]
     index = faiss.IndexFlatIP(dim)
@@ -120,9 +116,6 @@ def format_history(history: List[Dict[str, str]], max_turns: int = 5) -> str:
 
 
 def build_chat_messages(user_query: str, retrieved: List[Dict[str, Any]], history: List[Dict[str, str]], system_instruction: str = None) -> List[Dict[str, str]]:
-    """Return a list of messages suitable for chat.completions endpoints.
-    system_instruction: optional custom system prompt. If None, a strict default is used.
-    """
     context = "\n".join([f"- {r['text']}" for r in retrieved]) if retrieved else "No relevant context found."
     hist = format_history(history, max_turns=5)
 
@@ -146,16 +139,9 @@ def build_chat_messages(user_query: str, retrieved: List[Dict[str, Any]], histor
 # --------------------------- Generation (conversational) ---------------------------
 
 def generate_with_chat_completion(messages: List[Dict[str, str]], hf_token: str, model_name: str, max_new_tokens: int = 300, temperature: float = 0.7) -> str:
-    """Call the HF InferenceClient chat completion API and return assistant text.
-
-    Notes: different providers may return slightly different shapes. We try
-    to handle common variants (object with .choices, or dict with 'choices').
-    """
-    # set token env for libraries that rely on it
     os.environ["HUGGINGFACEHUB_API_TOKEN"] = hf_token
     client = InferenceClient(token=hf_token)
 
-    # prefer the chat completions path
     try:
         resp = client.chat.completions.create(
             model=model_name,
@@ -164,27 +150,21 @@ def generate_with_chat_completion(messages: List[Dict[str, str]], hf_token: str,
             temperature=temperature,
         )
     except Exception as e:
-        # bubble up a helpful message
         raise RuntimeError(f"Chat completion request failed: {e}")
 
-    # Parse result robustly
     assistant_text = ""
-    # object-like with .choices (some SDKs)
     try:
         if hasattr(resp, "choices") and len(resp.choices) > 0:
-            # choices[0].message.content or choices[0].message['content']
             choice = resp.choices[0]
             if hasattr(choice, "message"):
                 m = choice.message
                 assistant_text = m.content if hasattr(m, "content") else m.get("content", "")
             else:
-                # dict-like
                 assistant_text = choice.get("message", {}).get("content", "")
     except Exception:
         assistant_text = ""
 
     if not assistant_text:
-        # dict-like fallback
         try:
             data = resp if isinstance(resp, dict) else resp.__dict__
             choices = data.get("choices") or []
@@ -221,12 +201,9 @@ with st.sidebar:
     st.header("⚙️ Settings")
     model_name = st.selectbox(
         "Chat model",
-        options=[
-            "mistralai/Mistral-7B-Instruct-v0.3",
-        ],
+        options=["mistralai/Mistral-7B-Instruct-v0.3"],
         index=0,
     )
-
     chunk_size = st.slider("Chunk size (words)", 80, 400, 120, 10)
     overlap = st.slider("Overlap (words)", 10, 200, 30, 5)
     top_k = st.slider("Top-K retrieved chunks", 1, 10, 3, 1)
@@ -275,7 +252,6 @@ with col2:
 st.markdown("---")
 
 # --------------------------- Chat UI ---------------------------
-# Show history
 for m in st.session_state.chat_history:
     with st.chat_message(m["role"]):
         st.write(m["content"])
@@ -319,11 +295,3 @@ if user_msg:
                 with st.expander("🔎 Retrieved chunks (context)"):
                     for i, r in enumerate(retrieved, 1):
                         st.markdown(f"**{i}. (score={r['score']:.3f})**\n\n{r['text']}")
-
-
-
-
-
-
-
-
