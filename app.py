@@ -13,6 +13,7 @@ import docx
 
 # -------------------------- Huggingface Key -------------------------
 hf_token = st.secrets.get("HUGGINGFACEHUB_API_TOKEN", None)
+hf_token = st.secrets.get("HUGGINGFACEHUB_API_TOKEN", "")
 # --------------------------- Config / Page ---------------------------
 st.set_page_config(page_title="ChatWithYourPDF", page_icon="📄", layout="wide")
 st.title("📄💬 Chat-With-Your-PDF (Conversational)")
@@ -222,7 +223,6 @@ with st.sidebar:
     model_name = st.selectbox(
         "Chat model",
         options=[
-            # adjust these options to whichever provider you have access to
             "mistralai/Mistral-7B-Instruct-v0.3",
         ],
         index=0,
@@ -320,6 +320,7 @@ if user_msg:
                 with st.expander("🔎 Retrieved chunks (context)"):
                     for i, r in enumerate(retrieved, 1):
                         st.markdown(f"**{i}. (score={r['score']:.3f})**\n\n{r['text']}")
+
 
 
 
