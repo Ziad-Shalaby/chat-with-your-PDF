@@ -291,7 +291,7 @@ if user_msg:
         if not st.session_state.vector_ready:
             st.warning("Please upload a document first.")
         elif not hf_token:
-    st.error("Hugging Face token not found. Please add it to your Streamlit secrets.")
+            st.error("Hugging Face token not found. Please add it to your Streamlit secrets.")
         else:
             with st.spinner("Thinking..."):
                 try:
@@ -319,6 +319,7 @@ if user_msg:
                 with st.expander("🔎 Retrieved chunks (context)"):
                     for i, r in enumerate(retrieved, 1):
                         st.markdown(f"**{i}. (score={r['score']:.3f})**\n\n{r['text']}")
+
 
 
 
