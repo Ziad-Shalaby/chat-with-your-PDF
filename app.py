@@ -1,11 +1,8 @@
-# app.py
-# RAG Chatbot with Mistral-7B-Instruct via Hugging Face Inference API
-
 import os
 import re
 from io import BytesIO
 from pathlib import Path
-
+from typing import List, Dict, Any
 import streamlit as st
 import faiss
 import numpy as np
@@ -14,17 +11,19 @@ from sentence_transformers import SentenceTransformer
 from pypdf import PdfReader
 import docx
 
-
+# --------------------------- Config / Page ---------------------------
 st.set_page_config(page_title="ChatWithYourPDF", page_icon="🧠", layout="wide")
-st.title("🧠 Chat-With_Your-PDF")
-st.caption("Upload a PDF/DOCX/TXT, then chat. Answers are grounded to retrieved chunks from your document.")
+st.title("🧠 Chat-With_Your-PDF (Conversational)")
+st.caption("Upload a PDF / DOCX / TXT, then ask questions grounded in the document. Uses a conversational model via Hugging Face Inference API.")
 
+# --------------------------- Helpers: Embedding & Chunking ---------------------------
 @st.cache_resource(show_spinner=False)
-def get_embedder():
-    return SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+def get_embedder(model_name: str = "sentence-transformers/all-MiniLM-L6-v2") -> SentenceTransformer:
+    return SentenceTransformer(model_name)
 
-# File reading
-def read_uploaded_file(uploaded_file) -> dict:
+
+def read_uploaded_file(uploaded_file) -> Dict[str, Any]:
+    """Return a dict with doc_id, source, and extracted text."""
     ext = Path(uploaded_file.name).suffix.lower()
     text = ""
 
@@ -35,7 +34,12 @@ def read_uploaded_file(uploaded_file) -> dict:
             text += page_text + "\n"
 
     elif ext == ".txt":
-        text = uploaded_file.read().decode("utf-8", errors="ignore")
+        # uploaded_file.read() returns bytes
+        try:
+            text = uploaded_file.read().decode("utf-8", errors="ignore")
+        except Exception:
+            uploaded_file.seek(0)
+            text = uploaded_file.read().decode("utf-8", errors="ignore")
 
     elif ext == ".docx":
         file_bytes = uploaded_file.read()
@@ -47,13 +51,15 @@ def read_uploaded_file(uploaded_file) -> dict:
 
     return {"doc_id": Path(uploaded_file.name).stem, "source": uploaded_file.name, "text": text.strip()}
 
-# Chunking
-def clean_and_split_sentences(text: str):
+
+def clean_and_split_sentences(text: str) -> List[str]:
     sentences = re.split(r'(?<=[.!?])\s+', text)
     return [s.strip() for s in sentences if s and s.strip()]
 
-def chunk_text(doc: dict, chunk_size: int = 120, overlap: int = 30):
-    sentences = clean_and_split_sentences(doc["text"])
+
+def chunk_text(doc: Dict[str, Any], chunk_size: int = 120, overlap: int = 30) -> List[Dict[str, Any]]:
+    """Create overlapping word-based chunks (returns list of chunk dicts)."""
+    sentences = clean_and_split_sentences(doc["text"]) if doc.get("text") else []
     words = " ".join(sentences).split()
     chunks, start, cid = [], 0, 0
     if not words:
@@ -74,19 +80,23 @@ def chunk_text(doc: dict, chunk_size: int = 120, overlap: int = 30):
         start += step
     return chunks
 
-# Vector Store
-def build_vector_store(chunks, embedder):
+# --------------------------- Vector Store (FAISS) ---------------------------
+
+def build_vector_store(chunks: List[Dict[str, Any]], embedder: SentenceTransformer):
     texts = [c["text"] for c in chunks]
     if not texts:
         raise ValueError("No text chunks to index.")
+    # sentence-transformers encode -> numpy
     embeddings = embedder.encode(texts, convert_to_numpy=True, show_progress_bar=False)
+    # normalize to use inner product as cosine-sim
     faiss.normalize_L2(embeddings)
     dim = embeddings.shape[1]
     index = faiss.IndexFlatIP(dim)
     index.add(embeddings)
     return index, texts
 
-def search(query: str, index, texts, embedder, top_k: int = 5):
+
+def search(query: str, index: faiss.IndexFlat, texts: List[str], embedder: SentenceTransformer, top_k: int = 5):
     q = embedder.encode([query], convert_to_numpy=True)
     faiss.normalize_L2(q)
     distances, indices = index.search(q, top_k)
@@ -96,9 +106,9 @@ def search(query: str, index, texts, embedder, top_k: int = 5):
             results.append({"text": texts[idx], "score": float(score)})
     return results
 
-# Prompting (Mistral Instruct)
-def format_history(history, max_turns=5):
-    # keep last N turns (user+assistant pairs)
+# --------------------------- Prompting / Chat messages ---------------------------
+
+def format_history(history: List[Dict[str, str]], max_turns: int = 5) -> str:
     trimmed = history[-(max_turns * 2):]
     lines = []
     for m in trimmed:
@@ -106,61 +116,93 @@ def format_history(history, max_turns=5):
         lines.append(f"{role}: {m['content']}")
     return "\n".join(lines)
 
-def build_mistral_prompt(user_query: str, retrieved, history):
+
+def build_chat_messages(user_query: str, retrieved: List[Dict[str, Any]], history: List[Dict[str, str]], system_instruction: str = None) -> List[Dict[str, str]]:
+    """Return a list of messages suitable for chat.completions endpoints.
+    system_instruction: optional custom system prompt. If None, a strict default is used.
+    """
     context = "\n".join([f"- {r['text']}" for r in retrieved]) if retrieved else "No relevant context found."
     hist = format_history(history, max_turns=5)
 
-    system = (
-        "You are a helpful assistant that answers STRICTLY using the provided document context. "
-        "If the answer is not in the context, say you don't know and suggest what to search for next. "
-        "Be concise and cite no external facts."
+    default_system = (
+        "You are a helpful assistant that MUST answer strictly using the provided document context. "
+        "If the answer cannot be found in the context, say you don't know and optionally suggest a keyword to search for. "
+        "Be concise and do not invent facts. Cite nothing outside the supplied context."
     )
 
-    # Mistral Instruct style prompt
-    prompt = f"""[INST] <<SYS>>
-{system}
-<</SYS>>
+    system_content = system_instruction if system_instruction else default_system
+    user_prompt = (
+        f"Chat History:\n{hist}\n\nDocument Context:\n{context}\n\nUser Question: {user_query}\n"
+    )
 
-Chat History:
-{hist}
+    messages = [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": user_prompt},
+    ]
+    return messages
 
-Document Context:
-{context}
+# --------------------------- Generation (conversational) ---------------------------
 
-User Question: {user_query}
-[/INST]"""
-    return prompt
+def generate_with_chat_completion(messages: List[Dict[str, str]], hf_token: str, model_name: str, max_new_tokens: int = 300, temperature: float = 0.7) -> str:
+    """Call the HF InferenceClient chat completion API and return assistant text.
 
-# Generation via HF Inference API
-def generate_with_mistral_inference(prompt: str, hf_token: str, model_name: str, max_new_tokens=300, temperature=0.7, top_p=0.9):
+    Notes: different providers may return slightly different shapes. We try
+    to handle common variants (object with .choices, or dict with 'choices').
+    """
+    # set token env for libraries that rely on it
     os.environ["HUGGINGFACEHUB_API_TOKEN"] = hf_token
-    client = InferenceClient(model=model_name, token=hf_token)
-    # Stream=False: get final string
-    text = client.text_generation(
-        prompt=prompt,
-        max_new_tokens=max_new_tokens,
-        temperature=temperature,
-        top_p=top_p,
-        repetition_penalty=1.05,
-        do_sample=True,
-        stream=False,
-    )
-    return text.strip()
+    client = InferenceClient(token=hf_token)
 
-def rag_answer(user_query, index, texts, embedder, history, hf_token, model_name, top_k=3, max_new_tokens=300, temperature=0.7):
+    # prefer the chat completions path
+    try:
+        resp = client.chat.completions.create(
+            model=model_name,
+            messages=messages,
+            max_tokens=max_new_tokens,
+            temperature=temperature,
+        )
+    except Exception as e:
+        # bubble up a helpful message
+        raise RuntimeError(f"Chat completion request failed: {e}")
+
+    # Parse result robustly
+    assistant_text = ""
+    # object-like with .choices (some SDKs)
+    try:
+        if hasattr(resp, "choices") and len(resp.choices) > 0:
+            # choices[0].message.content or choices[0].message['content']
+            choice = resp.choices[0]
+            if hasattr(choice, "message"):
+                m = choice.message
+                assistant_text = m.content if hasattr(m, "content") else m.get("content", "")
+            else:
+                # dict-like
+                assistant_text = choice.get("message", {}).get("content", "")
+    except Exception:
+        assistant_text = ""
+
+    if not assistant_text:
+        # dict-like fallback
+        try:
+            data = resp if isinstance(resp, dict) else resp.__dict__
+            choices = data.get("choices") or []
+            if choices:
+                msg = choices[0].get("message") or choices[0]
+                assistant_text = (msg.get("content") or msg.get("text") or "").strip()
+        except Exception:
+            assistant_text = str(resp)
+
+    return assistant_text.strip()
+
+# --------------------------- RAG pipeline ---------------------------
+
+def rag_answer(user_query: str, index: faiss.IndexFlat, texts: List[str], embedder: SentenceTransformer, history: List[Dict[str, str]], hf_token: str, model_name: str, top_k: int = 3, max_new_tokens: int = 300, temperature: float = 0.7):
     retrieved = search(user_query, index, texts, embedder, top_k=top_k)
-    prompt = build_mistral_prompt(user_query, retrieved, history)
-    answer = generate_with_mistral_inference(
-        prompt=prompt,
-        hf_token=hf_token,
-        model_name=model_name,
-        max_new_tokens=max_new_tokens,
-        temperature=temperature,
-        top_p=0.9
-    )
+    messages = build_chat_messages(user_query, retrieved, history)
+    answer = generate_with_chat_completion(messages, hf_token, model_name, max_new_tokens, temperature)
     return answer, retrieved
 
-# Session State
+# --------------------------- Session State ---------------------------
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 if "index" not in st.session_state:
@@ -172,20 +214,23 @@ if "vector_ready" not in st.session_state:
 if "doc_name" not in st.session_state:
     st.session_state.doc_name = None
 
-# Sidebar
+# --------------------------- Sidebar / Controls ---------------------------
 with st.sidebar:
     st.header("⚙️ Settings")
     model_name = st.selectbox(
-    "LLaMA 3 model",
-    options=[
-        "meta-llama/Meta-Llama-3-8B-Instruct",
-        "meta-llama/Meta-Llama-3-70B-Instruct"
-    ],
-    index=0
-)
+        "Chat model",
+        options=[
+            # adjust these options to whichever provider you have access to
+            "meta-llama/llama-3-8b-instruct",
+            "mistralai/Mistral-7B-Instruct-v0.3",
+            "tiiuae/falcon-7b-instruct"
+        ],
+        index=0,
+    )
+
     hf_token = st.text_input("Hugging Face Token (hf_...)", type="password")
-    chunk_size = st.slider("Chunk size (words)", 80, 300, 120, 10)
-    overlap = st.slider("Overlap (words)", 10, 150, 30, 5)
+    chunk_size = st.slider("Chunk size (words)", 80, 400, 120, 10)
+    overlap = st.slider("Overlap (words)", 10, 200, 30, 5)
     top_k = st.slider("Top-K retrieved chunks", 1, 10, 3, 1)
     max_new_tokens = st.slider("Max new tokens", 64, 1024, 300, 16)
     temperature = st.slider("Temperature", 0.0, 1.5, 0.7, 0.1)
@@ -195,11 +240,11 @@ with st.sidebar:
         st.session_state.chat_history = []
         st.success("Chat cleared.")
 
-# Upload & Index
-c1, c2 = st.columns([1, 1])
+# --------------------------- Upload & Index ---------------------------
+col1, col2 = st.columns([1, 1])
+with col1:
+    uploaded = st.file_uploader("Upload a document (PDF / DOCX / TXT)", type=["pdf", "docx", "txt"])
 
-with c1:
-    uploaded = st.file_uploader("Upload a document", type=["pdf", "docx", "txt"])
     if uploaded:
         try:
             doc = read_uploaded_file(uploaded)
@@ -221,7 +266,7 @@ with c1:
         except Exception as e:
             st.error(f"Failed to process file: {e}")
 
-with c2:
+with col2:
     st.subheader("📄 Document Status")
     if st.session_state.vector_ready:
         st.success(f"Ready · {st.session_state.doc_name}")
@@ -231,8 +276,7 @@ with c2:
 
 st.markdown("---")
 
-# Chat UI
-
+# --------------------------- Chat UI ---------------------------
 # Show history
 for m in st.session_state.chat_history:
     with st.chat_message(m["role"]):
@@ -264,7 +308,7 @@ if user_msg:
                         model_name,
                         top_k=top_k,
                         max_new_tokens=max_new_tokens,
-                        temperature=temperature
+                        temperature=temperature,
                     )
                 except Exception as e:
                     answer = f"Generation failed: {e}"
