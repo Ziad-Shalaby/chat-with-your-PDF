@@ -3,6 +3,9 @@
 ## Overview
 Chat with Your PDF is a Streamlit-based web application that allows you to upload PDF files and interact with them using natural language. Powered by **Mistral-7B-Instruct** through the Hugging Face Inference API, this app extracts text from your PDFs and enables question-answering or conversational interaction with the content.
 
+## Live Demo
+Access the live application here: [Chat with Your PDF](https://chat-with-your-pdf-1.streamlit.app/)
+
 ## Features
 - Upload and process any PDF file.
 - Extract and embed text using sentence transformers.
