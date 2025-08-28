@@ -1,3 +1,6 @@
+# app.py
+# RAG Chatbot with Mistral-7B-Instruct via Hugging Face Inference API
+
 import os
 import re
 from io import BytesIO
@@ -173,13 +176,13 @@ if "doc_name" not in st.session_state:
 with st.sidebar:
     st.header("⚙️ Settings")
     model_name = st.selectbox(
-        "Mistral model",
-        options=[
-            "mistralai/Mistral-7B-Instruct-v0.3",
-            "mistralai/Mistral-7B-Instruct-v0.2"
-        ],
-        index=0
-    )
+    "LLaMA 3 model",
+    options=[
+        "meta-llama/Meta-Llama-3-8B-Instruct",
+        "meta-llama/Meta-Llama-3-70B-Instruct"
+    ],
+    index=0
+)
     hf_token = st.text_input("Hugging Face Token (hf_...)", type="password")
     chunk_size = st.slider("Chunk size (words)", 80, 300, 120, 10)
     overlap = st.slider("Overlap (words)", 10, 150, 30, 5)
