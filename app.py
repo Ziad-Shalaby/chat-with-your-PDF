@@ -162,16 +162,15 @@ Answer: """
             task = "conversational"
         else:
             task = "text-generation"
-        
+
+        # Pass parameters explicitly
         llm = HuggingFaceEndpoint(
             repo_id=model_name,
             huggingfacehub_api_token=hf_token,
             task=task,
-            model_kwargs={
-                "temperature": 0.1,
-                "max_new_tokens": 512,
-                "return_full_text": False
-            }
+            temperature=0.1,
+            max_new_tokens=512,
+            return_full_text=False
         )
 
         qa_chain = RetrievalQA.from_chain_type(
@@ -363,3 +362,4 @@ if user_msg:
                         st.markdown(f"**{i}. {source} (Page {page})**")
                         st.markdown(f"```\n{content}\n```")
                         st.markdown("---")
+
