@@ -160,10 +160,8 @@ Answer: """
         llm = HuggingFaceEndpoint(
             repo_id=model_name,
             huggingfacehub_api_token=hf_token,
-            max_length=512,
             temperature=0.1,
-            top_k=10,
-            top_p=0.95,
+            max_new_tokens=512,
         )
 
         qa_chain = RetrievalQA.from_chain_type(
