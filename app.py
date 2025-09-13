@@ -119,22 +119,17 @@ def build_vectorstore_langchain(chunks: List[Dict[str, Any]], embed_model_name: 
 def get_qa_chain(_vectorstore: FAISS, hf_token: str, model_name: str,
                  system_instruction: str, top_k: int,
                  max_new_tokens: int, temperature: float):
-    """
-    Build a RetrievalQA chain using HuggingFaceEndpoint LLM and the retriever from vectorstore.
-    Cached to avoid rebuilding every query.
-    """
+
     retriever = _vectorstore.as_retriever(search_kwargs={"k": top_k})
 
-    # LLM wrapper using HuggingFaceEndpoint
     llm = HuggingFaceEndpoint(
         repo_id=model_name,
         huggingfacehub_api_token=hf_token,
-        task="conversational",   
+        task="conversational",
         temperature=temperature,
         max_new_tokens=max_new_tokens
     )
 
-    # Simple prompt
     prompt_template = (
         system_instruction.strip()
         + "\n\nCONTEXT:\n{context}\n\nQUESTION:\n{question}\n\nAnswer concisely using only the context. "
@@ -264,6 +259,7 @@ if user_msg:
                         # doc.page_content is the text chunk
                         content = getattr(doc, "page_content", str(doc))
                         st.markdown(f"**{i}. {source} · Page {page}**\n\n{content}")
+
 
 
 
