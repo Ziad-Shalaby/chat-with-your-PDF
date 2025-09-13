@@ -129,7 +129,7 @@ def get_qa_chain(_vectorstore: FAISS, hf_token: str, model_name: str,
     llm = HuggingFaceEndpoint(
         repo_id=model_name,
         huggingfacehub_api_token=hf_token,
-        task="text-generation",   # ✅ Required
+        task="conversational",   
         temperature=temperature,
         max_new_tokens=max_new_tokens
     )
@@ -264,6 +264,7 @@ if user_msg:
                         # doc.page_content is the text chunk
                         content = getattr(doc, "page_content", str(doc))
                         st.markdown(f"**{i}. {source} · Page {page}**\n\n{content}")
+
 
 
 
