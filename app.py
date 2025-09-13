@@ -1,31 +1,33 @@
 import os
 import re
-import pickle
 from io import BytesIO
 from pathlib import Path
 from typing import List, Dict, Any
+
 import streamlit as st
-import faiss
 import numpy as np
-from huggingface_hub import InferenceClient
-from sentence_transformers import SentenceTransformer
+
+# Document parsing
 from pypdf import PdfReader
 import docx
 
+# LangChain pieces
+from langchain.schema import Document as LCDocument
+from langchain.embeddings import SentenceTransformerEmbeddings
+from langchain.vectorstores import FAISS
+from langchain.llms import HuggingFaceHub
+from langchain.chains import RetrievalQA
+from langchain.prompts import PromptTemplate
+
 # --------------------------- Config / Page ---------------------------
 st.set_page_config(page_title="ChatWithYourDocs", page_icon="📄", layout="wide")
-st.title("📄💬 Chat-With-Your-Docs")
-st.caption("Upload multiple PDF / DOCX / TXT files, then chat with them using RAG (Mistral via Hugging Face Inference API).")
+st.title("📄💬 Chat-With-Your-Docs (LangChain RAG)")
+st.caption("Upload PDF / DOCX / TXT files, then chat with them using RAG (LangChain + Hugging Face).")
 
 # --------------------------- Load Hugging Face Token ---------------------------
 hf_token = st.secrets.get("HUGGINGFACEHUB_API_TOKEN", "")
 
-# --------------------------- Helpers: Embedding & Chunking ---------------------------
-@st.cache_resource(show_spinner=False)
-def get_embedder(model_name: str = "sentence-transformers/all-MiniLM-L6-v2") -> SentenceTransformer:
-    return SentenceTransformer(model_name)
-
-
+# --------------------------- Helpers: Read & Chunk ---------------------------
 def read_uploaded_file(uploaded_file) -> Dict[str, Any]:
     """Read PDF/DOCX/TXT into structured text pages"""
     ext = Path(uploaded_file.name).suffix.lower()
@@ -74,7 +76,7 @@ def clean_and_split_sentences(text: str) -> List[str]:
 
 
 def chunk_text(doc: Dict[str, Any], chunk_size: int = 120, overlap: int = 30) -> List[Dict[str, Any]]:
-    """Split document pages into overlapping chunks"""
+    """Split document pages into overlapping chunks (word-based)"""
     chunks, cid = [], 0
     for page in doc["pages"]:
         sentences = clean_and_split_sentences(page["text"]) if page["text"] else []
@@ -97,95 +99,71 @@ def chunk_text(doc: Dict[str, Any], chunk_size: int = 120, overlap: int = 30) ->
             start += step
     return chunks
 
-# --------------------------- Vector Store (FAISS) ---------------------------
-def build_vector_store(chunks: List[Dict[str, Any]], embedder: SentenceTransformer):
+# --------------------------- LangChain: build vectorstore ---------------------------
+@st.cache_resource(show_spinner=False)
+def build_vectorstore_langchain(chunks: List[Dict[str, Any]], embed_model_name: str = "all-MiniLM-L6-v2"):
+    """
+    Convert chunks -> texts + metadatas, then build a FAISS vectorstore using
+    SentenceTransformerEmbeddings (no HF token required for embeddings).
+    """
+    if not chunks:
+        raise ValueError("No chunks provided to build the vectorstore.")
+
     texts = [c["text"] for c in chunks]
-    if not texts:
-        raise ValueError("No text chunks to index.")
-
-    embeddings = embedder.encode(texts, batch_size=32, convert_to_numpy=True, show_progress_bar=False)
-    faiss.normalize_L2(embeddings)
-    dim = embeddings.shape[1]
-    index = faiss.IndexFlatIP(dim)
-    index.add(embeddings)
-    return index, texts, chunks
-
-
-def search(query: str, index: faiss.IndexFlat, texts: List[str], chunks: List[Dict[str, Any]], embedder: SentenceTransformer, top_k: int = 5):
-    q = embedder.encode([query], convert_to_numpy=True)
-    faiss.normalize_L2(q)
-    distances, indices = index.search(q, top_k)
-    results = []
-    for idx, score in zip(indices[0], distances[0]):
-        if 0 <= idx < len(texts):
-            results.append({
-                "text": texts[idx],
-                "score": float(score),
-                "source": chunks[idx]["source"],
-                "page": chunks[idx].get("page", "?")
-            })
-    return results
-
-# --------------------------- Prompting ---------------------------
-def build_chat_messages(user_query: str, retrieved: List[Dict[str, Any]], history: List[Dict[str, str]], system_instruction: str) -> List[Dict[str, str]]:
-    if retrieved:
-        context = "\n".join([f"- {r['text']}" for r in retrieved])
-    else:
-        context = "No relevant context found."
-
-    hist = "\n".join([f"{m['role'].capitalize()}: {m['content']}" for m in history[-10:]])
-
-    user_prompt = (
-        f"Chat History:\n{hist}\n\nDocument Context:\n{context}\n\nUser Question: {user_query}\n"
-    )
-
-    messages = [
-        {"role": "system", "content": system_instruction},
-        {"role": "user", "content": user_prompt},
+    metadatas = [
+        {"source": c["source"], "page": c.get("page", None), "doc_id": c["doc_id"], "chunk_id": c["id"]}
+        for c in chunks
     ]
-    return messages
 
-# --------------------------- Generation ---------------------------
-def generate_with_chat_completion(messages: List[Dict[str, str]], hf_token: str, model_name: str, max_new_tokens: int = 300, temperature: float = 0.7) -> str:
-    client = InferenceClient(token=hf_token)
-    try:
-        resp = client.chat.completions.create(
-            model=model_name,
-            messages=messages,
-            max_tokens=max_new_tokens,
-            temperature=temperature,
-        )
-        if hasattr(resp, "choices") and len(resp.choices) > 0:
-            return resp.choices[0].message.content.strip()
-        return "⚠️ No response from model."
-    except Exception as e:
-        return f"❌ Generation failed: {e}"
+    embeddings = SentenceTransformerEmbeddings(model_name=embed_model_name)
+    vectorstore = FAISS.from_texts(texts, embeddings, metadatas=metadatas)
+    return vectorstore
 
-# --------------------------- RAG pipeline ---------------------------
-def rag_answer(user_query: str, index, texts, chunks, embedder, history, hf_token, model_name, system_instruction, top_k=3, max_new_tokens=300, temperature=0.7):
-    retrieved = search(user_query, index, texts, chunks, embedder, top_k=top_k)
-    if not retrieved:
-        return "I couldn’t find anything related in your documents.", []
-    messages = build_chat_messages(user_query, retrieved, history, system_instruction)
-    answer = generate_with_chat_completion(messages, hf_token, model_name, max_new_tokens, temperature)
-    return answer, retrieved
+# --------------------------- LangChain: build QA chain ---------------------------
+@st.cache_resource(show_spinner=False)
+def get_qa_chain(vectorstore: FAISS, hf_token: str, model_name: str, system_instruction: str, top_k: int, max_new_tokens: int, temperature: float):
+    """
+    Build a RetrievalQA chain using HuggingFaceHub LLM and the retriever from vectorstore.
+    Cached to avoid rebuilding every query.
+    """
+    retriever = vectorstore.as_retriever(search_kwargs={"k": top_k})
+
+    # LLM wrapper using HuggingFaceHub
+    llm = HuggingFaceHub(repo_id=model_name, huggingfacehub_api_token=hf_token, model_kwargs={
+        "temperature": temperature,
+        "max_new_tokens": max_new_tokens
+    })
+
+    # Simple prompt that instructs the model to use only provided context
+    prompt_template = (
+        system_instruction.strip()
+        + "\n\nCONTEXT:\n{context}\n\nQUESTION:\n{question}\n\nAnswer concisely using only the context. If answer not in the context, say you don't know."
+    )
+    prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
+
+    qa_chain = RetrievalQA.from_chain_type(
+        llm=llm,
+        chain_type="stuff",
+        retriever=retriever,
+        return_source_documents=True,
+        chain_type_kwargs={"prompt": prompt}
+    )
+    return qa_chain
 
 # --------------------------- Session State ---------------------------
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
-if "index" not in st.session_state:
-    st.session_state.index = None
-if "texts" not in st.session_state:
-    st.session_state.texts = None
+if "vectorstore" not in st.session_state:
+    st.session_state.vectorstore = None
 if "chunks" not in st.session_state:
     st.session_state.chunks = None
 if "vector_ready" not in st.session_state:
     st.session_state.vector_ready = False
 
-# --------------------------- Sidebar ---------------------------
+# --------------------------- Sidebar: Settings ---------------------------
 with st.sidebar:
     st.header("⚙️ Settings")
-    model_name = st.selectbox("Chat model", ["mistralai/Mistral-7B-Instruct-v0.3"], index=0)
+    model_name = st.selectbox("Chat model (Hugging Face repo id)", ["mistralai/Mistral-7B-Instruct-v0.3"], index=0)
     chunk_size = st.slider("Chunk size (words)", 80, 400, 120, 10)
     overlap = st.slider("Overlap (words)", 10, 200, 30, 5)
     top_k = st.slider("Top-K retrieved chunks", 1, 10, 3, 1)
@@ -205,12 +183,12 @@ with st.sidebar:
         st.success("Chat cleared.")
 
     if st.session_state.chat_history:
-        if st.download_button("💾 Download transcript", 
+        if st.download_button("💾 Download transcript",
                               data="\n".join([f"{m['role'].capitalize()}: {m['content']}" for m in st.session_state.chat_history]),
                               file_name="chat_transcript.txt"):
             st.success("Transcript downloaded.")
 
-# --------------------------- Upload & Index ---------------------------
+# --------------------------- Upload & Index (LangChain FAISS) ---------------------------
 uploaded_files = st.file_uploader("Upload one or more documents (PDF / DOCX / TXT)", type=["pdf", "docx", "txt"], accept_multiple_files=True)
 
 if uploaded_files:
@@ -221,13 +199,14 @@ if uploaded_files:
         all_chunks.extend(doc_chunks)
 
     if all_chunks:
-        embedder = get_embedder()
-        index, texts, chunks = build_vector_store(all_chunks, embedder)
-        st.session_state.index = index
-        st.session_state.texts = texts
-        st.session_state.chunks = chunks
-        st.session_state.vector_ready = True
-        st.success(f"✅ Indexed {len(all_chunks)} chunks from {len(uploaded_files)} documents.")
+        try:
+            vectorstore = build_vectorstore_langchain(all_chunks, embed_model_name="all-MiniLM-L6-v2")
+            st.session_state.vectorstore = vectorstore
+            st.session_state.chunks = all_chunks
+            st.session_state.vector_ready = True
+            st.success(f"✅ Indexed {len(all_chunks)} chunks from {len(uploaded_files)} documents.")
+        except Exception as e:
+            st.error(f"Failed to build vectorstore: {e}")
 
 # --------------------------- Chat UI ---------------------------
 for m in st.session_state.chat_history:
@@ -242,31 +221,44 @@ if user_msg:
         st.write(user_msg)
 
     with st.chat_message("assistant"):
-        if not st.session_state.vector_ready:
+        if not st.session_state.vector_ready or st.session_state.vectorstore is None:
             st.warning("Please upload documents first.")
         elif not hf_token:
             st.error("Hugging Face token not found. Please add it to your Streamlit secrets.")
         else:
-            with st.spinner("Thinking..."):
-                embedder = get_embedder()
-                answer, retrieved = rag_answer(
-                    user_msg,
-                    st.session_state.index,
-                    st.session_state.texts,
-                    st.session_state.chunks,
-                    embedder,
-                    st.session_state.chat_history,
-                    hf_token,
-                    model_name,
-                    system_instruction,
-                    top_k=top_k,
-                    max_new_tokens=max_new_tokens,
-                    temperature=temperature,
-                )
+            with st.spinner("Thinking (LangChain + HuggingFace)..."):
+                try:
+                    qa_chain = get_qa_chain(
+                        st.session_state.vectorstore,
+                        hf_token,
+                        model_name,
+                        system_instruction,
+                        top_k,
+                        max_new_tokens,
+                        temperature
+                    )
+                    res = qa_chain({"query": user_msg})
+                    # RetrievalQA when return_source_documents=True returns a dict with 'result' and 'source_documents'
+                    if isinstance(res, dict) and "result" in res:
+                        answer = res["result"]
+                        source_documents = res.get("source_documents", [])
+                    else:
+                        # backward compatible fallback
+                        answer = str(res)
+                        source_documents = []
+                except Exception as e:
+                    answer = f"❌ Error during generation: {e}"
+                    source_documents = []
+
             st.write(answer)
             st.session_state.chat_history.append({"role": "assistant", "content": answer})
 
-            if show_sources and retrieved:
+            if show_sources and source_documents:
                 with st.expander("🔎 Retrieved chunks (context)"):
-                    for i, r in enumerate(retrieved, 1):
-                        st.markdown(f"**{i}. {r['source']} · Page {r['page']} (score={r['score']:.3f})**\n\n{r['text']}")
+                    for i, doc in enumerate(source_documents, 1):
+                        meta = doc.metadata if hasattr(doc, "metadata") else {}
+                        source = meta.get("source", "unknown")
+                        page = meta.get("page", "?")
+                        # doc.page_content is the text chunk
+                        content = getattr(doc, "page_content", str(doc))
+                        st.markdown(f"**{i}. {source} · Page {page}**\n\n{content}")
