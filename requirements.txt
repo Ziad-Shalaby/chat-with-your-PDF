@@ -1,12 +1,9 @@
 streamlit
-pandas
-numpy
-transformers
-huggingface-hub
 faiss-cpu
-sentence-transformers
+numpy
 pypdf
 python-docx
-docx2txt
-unstructured
-tqdm
+sentence-transformers
+huggingface_hub
+langchain
+langchain-community
