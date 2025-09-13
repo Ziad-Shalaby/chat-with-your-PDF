@@ -157,11 +157,21 @@ Answer: """
     )
 
     try:
+        # Determine the appropriate task based on the model
+        if any(model in model_name.lower() for model in ["mistral", "mixtral", "zephyr"]):
+            task = "conversational"
+        else:
+            task = "text-generation"
+        
         llm = HuggingFaceEndpoint(
             repo_id=model_name,
             huggingfacehub_api_token=hf_token,
-            temperature=0.1,
-            max_new_tokens=512,
+            task=task,
+            model_kwargs={
+                "temperature": 0.1,
+                "max_new_tokens": 512,
+                "return_full_text": False
+            }
         )
 
         qa_chain = RetrievalQA.from_chain_type(
@@ -353,7 +363,3 @@ if user_msg:
                         st.markdown(f"**{i}. {source} (Page {page})**")
                         st.markdown(f"```\n{content}\n```")
                         st.markdown("---")
-
-# Footer
-st.markdown("---")
-st.markdown("*Built with Streamlit, LangChain, and Hugging Face 🚀*")
