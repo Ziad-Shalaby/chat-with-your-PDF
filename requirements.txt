@@ -1,7 +1,12 @@
 streamlit
-pypdf
-python-docx
+pandas
+numpy
+transformers
+huggingface-hub
 faiss-cpu
 sentence-transformers
-transformers
-
+pypdf
+python-docx
+docx2txt
+unstructured
+tqdm
