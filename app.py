@@ -3,10 +3,12 @@ import re
 from io import BytesIO
 from pathlib import Path
 from typing import List, Dict, Any
+
 import streamlit as st
 import numpy as np
 from pypdf import PdfReader
 import docx
+
 from langchain.schema import Document as LCDocument
 from langchain.embeddings import SentenceTransformerEmbeddings
 from langchain.vectorstores import FAISS
@@ -97,10 +99,6 @@ def chunk_text(doc: Dict[str, Any], chunk_size: int = 120, overlap: int = 30) ->
 # --------------------------- LangChain: build vectorstore ---------------------------
 @st.cache_resource(show_spinner=False)
 def build_vectorstore_langchain(chunks: List[Dict[str, Any]], embed_model_name: str = "all-MiniLM-L6-v2"):
-    """
-    Convert chunks -> texts + metadatas, then build a FAISS vectorstore using
-    SentenceTransformerEmbeddings (no HF token required for embeddings).
-    """
     if not chunks:
         raise ValueError("No chunks provided to build the vectorstore.")
 
@@ -114,6 +112,7 @@ def build_vectorstore_langchain(chunks: List[Dict[str, Any]], embed_model_name: 
     vectorstore = FAISS.from_texts(texts, embeddings, metadatas=metadatas)
     return vectorstore
 
+# --------------------------- LangChain: build QA chain ---------------------------
 @st.cache_resource(show_spinner=False)
 def get_qa_chain(_vectorstore: FAISS, hf_token: str, model_name: str,
                  system_instruction: str, top_k: int,
@@ -121,11 +120,10 @@ def get_qa_chain(_vectorstore: FAISS, hf_token: str, model_name: str,
 
     retriever = _vectorstore.as_retriever(search_kwargs={"k": top_k})
 
-    # ✅ Use "conversational" task instead of "text-generation"
     llm = HuggingFaceEndpoint(
         repo_id=model_name,
         huggingfacehub_api_token=hf_token,
-        task="conversational",
+        task="conversational",  # ✅ correct for Mistral instruct
         temperature=temperature,
         max_new_tokens=max_new_tokens
     )
@@ -160,7 +158,9 @@ if "vector_ready" not in st.session_state:
 # --------------------------- Sidebar: Settings ---------------------------
 with st.sidebar:
     st.header("⚙️ Settings")
-    model_name = st.selectbox("Chat model (Hugging Face repo id)", ["mistralai/Mistral-7B-Instruct-v0.3"], index=0)
+    model_name = st.selectbox("Chat model (Hugging Face repo id)",
+                              ["mistralai/Mistral-7B-Instruct-v0.3",
+                               "mistralai/Mixtral-8x7B-Instruct-v0.1"], index=0)
     chunk_size = st.slider("Chunk size (words)", 80, 400, 120, 10)
     overlap = st.slider("Overlap (words)", 10, 200, 30, 5)
     top_k = st.slider("Top-K retrieved chunks", 1, 10, 3, 1)
@@ -186,7 +186,8 @@ with st.sidebar:
             st.success("Transcript downloaded.")
 
 # --------------------------- Upload & Index (LangChain FAISS) ---------------------------
-uploaded_files = st.file_uploader("Upload one or more documents (PDF / DOCX / TXT)", type=["pdf", "docx", "txt"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("Upload one or more documents (PDF / DOCX / TXT)",
+                                  type=["pdf", "docx", "txt"], accept_multiple_files=True)
 
 if uploaded_files:
     all_chunks = []
@@ -197,7 +198,7 @@ if uploaded_files:
 
     if all_chunks:
         try:
-            vectorstore = build_vectorstore_langchain(all_chunks, embed_model_name="all-MiniLM-L6-v2")
+            vectorstore = build_vectorstore_langchain(all_chunks)
             st.session_state.vectorstore = vectorstore
             st.session_state.chunks = all_chunks
             st.session_state.vector_ready = True
@@ -235,12 +236,10 @@ if user_msg:
                         temperature
                     )
                     res = qa_chain({"query": user_msg})
-                    # RetrievalQA when return_source_documents=True returns a dict with 'result' and 'source_documents'
                     if isinstance(res, dict) and "result" in res:
                         answer = res["result"]
                         source_documents = res.get("source_documents", [])
                     else:
-                        # backward compatible fallback
                         answer = str(res)
                         source_documents = []
                 except Exception as e:
@@ -256,12 +255,5 @@ if user_msg:
                         meta = doc.metadata if hasattr(doc, "metadata") else {}
                         source = meta.get("source", "unknown")
                         page = meta.get("page", "?")
-                        # doc.page_content is the text chunk
                         content = getattr(doc, "page_content", str(doc))
                         st.markdown(f"**{i}. {source} · Page {page}**\n\n{content}")
-
-
-
-
-
-
