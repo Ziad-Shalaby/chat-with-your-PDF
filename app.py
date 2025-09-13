@@ -8,13 +8,10 @@ import streamlit as st
 import numpy as np
 from pypdf import PdfReader
 import docx
-
-from langchain.schema import Document as LCDocument
 from langchain.embeddings import SentenceTransformerEmbeddings
 from langchain.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEndpoint
 from langchain.chains import RetrievalQA
-from langchain.prompts import PromptTemplate
 
 # --------------------------- Config / Page ---------------------------
 st.set_page_config(page_title="ChatWithYourDocs", page_icon="📄", layout="wide")
@@ -26,7 +23,6 @@ hf_token = st.secrets.get("HUGGINGFACEHUB_API_TOKEN", "")
 
 # --------------------------- Helpers: Read & Chunk ---------------------------
 def read_uploaded_file(uploaded_file) -> Dict[str, Any]:
-    """Read PDF/DOCX/TXT into structured text pages"""
     ext = Path(uploaded_file.name).suffix.lower()
     text = ""
     pages = []
@@ -39,22 +35,18 @@ def read_uploaded_file(uploaded_file) -> Dict[str, Any]:
                 if page_text.strip():
                     pages.append({"page": i, "text": page_text})
                     text += page_text + "\n"
-
         elif ext == ".txt":
             content = uploaded_file.read().decode("utf-8", errors="ignore")
             pages = [{"page": 1, "text": content}]
             text = content
-
         elif ext == ".docx":
             file_bytes = uploaded_file.read()
             document = docx.Document(BytesIO(file_bytes))
             content = "\n".join(p.text for p in document.paragraphs if p.text.strip())
             pages = [{"page": 1, "text": content}]
             text = content
-
         else:
             raise ValueError(f"Unsupported file type: {ext}")
-
     except Exception as e:
         st.error(f"❌ Error reading {uploaded_file.name}: {e}")
         return {"doc_id": Path(uploaded_file.name).stem, "source": uploaded_file.name, "text": "", "pages": []}
@@ -66,14 +58,11 @@ def read_uploaded_file(uploaded_file) -> Dict[str, Any]:
         "pages": pages
     }
 
-
 def clean_and_split_sentences(text: str) -> List[str]:
     sentences = re.split(r'(?<=[.!?])\s+', text)
     return [s.strip() for s in sentences if s and s.strip()]
 
-
 def chunk_text(doc: Dict[str, Any], chunk_size: int = 120, overlap: int = 30) -> List[Dict[str, Any]]:
-    """Split document pages into overlapping chunks (word-based)"""
     chunks, cid = [], 0
     for page in doc["pages"]:
         sentences = clean_and_split_sentences(page["text"]) if page["text"] else []
@@ -114,32 +103,19 @@ def build_vectorstore_langchain(chunks: List[Dict[str, Any]], embed_model_name: 
 
 # --------------------------- LangChain: build QA chain ---------------------------
 @st.cache_resource(show_spinner=False)
-def get_qa_chain(_vectorstore: FAISS, hf_token: str, model_name: str,
-                 system_instruction: str, top_k: int,
-                 max_new_tokens: int, temperature: float):
-
+def get_qa_chain(_vectorstore: FAISS, hf_token: str, model_name: str, top_k: int):
     retriever = _vectorstore.as_retriever(search_kwargs={"k": top_k})
 
     llm = HuggingFaceEndpoint(
         repo_id=model_name,
         huggingfacehub_api_token=hf_token,
-        task="conversational",  # ✅ correct for Mistral instruct
-        temperature=temperature,
-        max_new_tokens=max_new_tokens
+        task="conversational"  # ✅ must be conversational for Mistral models
     )
-
-    prompt_template = (
-        system_instruction.strip()
-        + "\n\nCONTEXT:\n{context}\n\nQUESTION:\n{question}\n\nAnswer concisely using only the context. "
-          "If answer not in the context, say you don't know."
-    )
-    prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
 
     qa_chain = RetrievalQA.from_chain_type(
         llm=llm,
         retriever=retriever,
         chain_type="stuff",
-        chain_type_kwargs={"prompt": prompt},
         return_source_documents=True
     )
 
@@ -164,8 +140,6 @@ with st.sidebar:
     chunk_size = st.slider("Chunk size (words)", 80, 400, 120, 10)
     overlap = st.slider("Overlap (words)", 10, 200, 30, 5)
     top_k = st.slider("Top-K retrieved chunks", 1, 10, 3, 1)
-    max_new_tokens = st.slider("Max new tokens", 64, 1024, 300, 16)
-    temperature = st.slider("Temperature", 0.0, 1.5, 0.7, 0.1)
 
     st.subheader("System Prompt")
     system_instruction = st.text_area("Instruction for assistant", value=(
@@ -179,13 +153,7 @@ with st.sidebar:
         st.session_state.chat_history = []
         st.success("Chat cleared.")
 
-    if st.session_state.chat_history:
-        if st.download_button("💾 Download transcript",
-                              data="\n".join([f"{m['role'].capitalize()}: {m['content']}" for m in st.session_state.chat_history]),
-                              file_name="chat_transcript.txt"):
-            st.success("Transcript downloaded.")
-
-# --------------------------- Upload & Index (LangChain FAISS) ---------------------------
+# --------------------------- Upload & Index ---------------------------
 uploaded_files = st.file_uploader("Upload one or more documents (PDF / DOCX / TXT)",
                                   type=["pdf", "docx", "txt"], accept_multiple_files=True)
 
@@ -226,15 +194,7 @@ if user_msg:
         else:
             with st.spinner("Thinking (LangChain + HuggingFace)..."):
                 try:
-                    qa_chain = get_qa_chain(
-                        st.session_state.vectorstore,
-                        hf_token,
-                        model_name,
-                        system_instruction,
-                        top_k,
-                        max_new_tokens,
-                        temperature
-                    )
+                    qa_chain = get_qa_chain(st.session_state.vectorstore, hf_token, model_name, top_k)
                     res = qa_chain({"query": user_msg})
                     if isinstance(res, dict) and "result" in res:
                         answer = res["result"]
