@@ -461,19 +461,46 @@ else:
         with st.chat_message("assistant"):
             with st.spinner("🤔 Thinking..."):
                 try:
-                    # Get response from RAG chain
-                    result = st.session_state.rag_chain({
-                        "question": user_question
-                    })
+                    # Try LangChain RAG chain first
+                    if st.session_state.rag_chain is not None:
+                        try:
+                            result = st.session_state.rag_chain({
+                                "question": user_question
+                            })
+                            
+                            response = result.get("answer", "No answer generated.")
+                            source_documents = result.get("source_documents", [])
+                            
+                            # Clean up response
+                            if isinstance(response, str) and response.strip():
+                                response = response.strip()
+                            else:
+                                response = "I couldn't generate a proper response. Please try rephrasing your question."
+                            
+                        except Exception as chain_error:
+                            st.warning("LangChain method failed, trying simple RAG...")
+                            # Fall back to simple RAG
+                            response, source_documents = simple_rag_query(
+                                user_question, 
+                                st.session_state.vector_store, 
+                                hf_token, 
+                                model_name, 
+                                top_k, 
+                                max_new_tokens, 
+                                temperature
+                            )
                     
-                    response = result.get("answer", "No answer generated.")
-                    source_documents = result.get("source_documents", [])
-                    
-                    # Clean up response if needed
-                    if isinstance(response, str) and response.strip():
-                        response = response.strip()
                     else:
-                        response = "I couldn't generate a proper response. Please try rephrasing your question."
+                        # Use simple RAG directly
+                        response, source_documents = simple_rag_query(
+                            user_question, 
+                            st.session_state.vector_store, 
+                            hf_token, 
+                            model_name, 
+                            top_k, 
+                            max_new_tokens, 
+                            temperature
+                        )
                     
                     # Display response
                     st.write(response)
@@ -513,17 +540,20 @@ else:
                     st.session_state.chat_history.append({"role": "assistant", "content": response})
                     
                 except Exception as e:
-                    error_msg = f"❌ I encountered an error: {str(e)[:200]}..."
-                    st.error("I'm having trouble generating a response. This could be due to:")
-                    st.error("- Model server being busy")
-                    st.error("- Token rate limits")
-                    st.error("- Network connectivity issues")
-                    st.info("💡 Try: Selecting a different model, waiting a moment, or rephrasing your question.")
+                    st.error("🔧 **Troubleshooting Tips:**")
+                    st.error("1. **Try a different model**: Some models may be temporarily unavailable")
+                    st.error("2. **Check your token**: Ensure HUGGINGFACEHUB_API_TOKEN is valid")
+                    st.error("3. **Wait and retry**: HuggingFace servers can be busy")
+                    st.error("4. **Reduce parameters**: Try lower max_new_tokens or temperature")
                     
-                    # Add error to history for context
+                    with st.expander("🐛 Technical Details"):
+                        st.code(str(e))
+                    
+                    # Add fallback response to history
+                    fallback_response = "I'm having technical difficulties right now. Please try again in a moment or try a different model."
                     st.session_state.chat_history.append({
                         "role": "assistant", 
-                        "content": "I apologize, but I encountered a technical issue. Please try again."
+                        "content": fallback_response
                     })
 
 # Footer and Help Section
