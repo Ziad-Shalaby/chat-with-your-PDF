@@ -94,6 +94,26 @@ def chunk_text(doc: Dict[str, Any], chunk_size: int = 120, overlap: int = 30) ->
             start += step
     return chunks
 
+# --------------------------- LangChain: build vectorstore ---------------------------
+@st.cache_resource(show_spinner=False)
+def build_vectorstore_langchain(chunks: List[Dict[str, Any]], embed_model_name: str = "all-MiniLM-L6-v2"):
+    """
+    Convert chunks -> texts + metadatas, then build a FAISS vectorstore using
+    SentenceTransformerEmbeddings (no HF token required for embeddings).
+    """
+    if not chunks:
+        raise ValueError("No chunks provided to build the vectorstore.")
+
+    texts = [c["text"] for c in chunks]
+    metadatas = [
+        {"source": c["source"], "page": c.get("page", None), "doc_id": c["doc_id"], "chunk_id": c["id"]}
+        for c in chunks
+    ]
+
+    embeddings = SentenceTransformerEmbeddings(model_name=embed_model_name)
+    vectorstore = FAISS.from_texts(texts, embeddings, metadatas=metadatas)
+    return vectorstore
+
 # --------------------------- LangChain: build QA chain ---------------------------
 @st.cache_resource(show_spinner=False)
 def get_qa_chain(_vectorstore: FAISS, hf_token: str, model_name: str,
@@ -240,4 +260,5 @@ if user_msg:
                         # doc.page_content is the text chunk
                         content = getattr(doc, "page_content", str(doc))
                         st.markdown(f"**{i}. {source} · Page {page}**\n\n{content}")
+
 
