@@ -466,8 +466,14 @@ else:
                         "question": user_question
                     })
                     
-                    response = result["answer"]
+                    response = result.get("answer", "No answer generated.")
                     source_documents = result.get("source_documents", [])
+                    
+                    # Clean up response if needed
+                    if isinstance(response, str) and response.strip():
+                        response = response.strip()
+                    else:
+                        response = "I couldn't generate a proper response. Please try rephrasing your question."
                     
                     # Display response
                     st.write(response)
@@ -507,9 +513,18 @@ else:
                     st.session_state.chat_history.append({"role": "assistant", "content": response})
                     
                 except Exception as e:
-                    error_msg = f"❌ Error generating response: {str(e)}"
-                    st.error(error_msg)
-                    st.session_state.chat_history.append({"role": "assistant", "content": error_msg})
+                    error_msg = f"❌ I encountered an error: {str(e)[:200]}..."
+                    st.error("I'm having trouble generating a response. This could be due to:")
+                    st.error("- Model server being busy")
+                    st.error("- Token rate limits")
+                    st.error("- Network connectivity issues")
+                    st.info("💡 Try: Selecting a different model, waiting a moment, or rephrasing your question.")
+                    
+                    # Add error to history for context
+                    st.session_state.chat_history.append({
+                        "role": "assistant", 
+                        "content": "I apologize, but I encountered a technical issue. Please try again."
+                    })
 
 # Footer and Help Section
 st.markdown("---")
