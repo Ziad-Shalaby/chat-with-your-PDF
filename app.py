@@ -240,3 +240,4 @@ if user_msg:
                         # doc.page_content is the text chunk
                         content = getattr(doc, "page_content", str(doc))
                         st.markdown(f"**{i}. {source} · Page {page}**\n\n{content}")
+
