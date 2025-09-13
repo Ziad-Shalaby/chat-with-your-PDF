@@ -27,32 +27,38 @@ def get_embedder(model_name: str = "sentence-transformers/all-MiniLM-L6-v2") -> 
 
 
 def read_uploaded_file(uploaded_file) -> Dict[str, Any]:
+    """Read PDF/DOCX/TXT into structured text pages"""
     ext = Path(uploaded_file.name).suffix.lower()
     text = ""
     pages = []
 
-    if ext == ".pdf":
-        reader = PdfReader(uploaded_file)
-        for i, page in enumerate(reader.pages, start=1):
-            page_text = page.extract_text() or ""
-            if page_text.strip():
-                pages.append({"page": i, "text": page_text})
-                text += page_text + "\n"
+    try:
+        if ext == ".pdf":
+            reader = PdfReader(uploaded_file)
+            for i, page in enumerate(reader.pages, start=1):
+                page_text = page.extract_text() or ""
+                if page_text.strip():
+                    pages.append({"page": i, "text": page_text})
+                    text += page_text + "\n"
 
-    elif ext == ".txt":
-        content = uploaded_file.read().decode("utf-8", errors="ignore")
-        pages = [{"page": 1, "text": content}]
-        text = content
+        elif ext == ".txt":
+            content = uploaded_file.read().decode("utf-8", errors="ignore")
+            pages = [{"page": 1, "text": content}]
+            text = content
 
-    elif ext == ".docx":
-        file_bytes = uploaded_file.read()
-        document = docx.Document(BytesIO(file_bytes))
-        content = "\n".join(p.text for p in document.paragraphs if p.text.strip())
-        pages = [{"page": 1, "text": content}]
-        text = content
+        elif ext == ".docx":
+            file_bytes = uploaded_file.read()
+            document = docx.Document(BytesIO(file_bytes))
+            content = "\n".join(p.text for p in document.paragraphs if p.text.strip())
+            pages = [{"page": 1, "text": content}]
+            text = content
 
-    else:
-        raise ValueError(f"Unsupported file type: {ext}")
+        else:
+            raise ValueError(f"Unsupported file type: {ext}")
+
+    except Exception as e:
+        st.error(f"❌ Error reading {uploaded_file.name}: {e}")
+        return {"doc_id": Path(uploaded_file.name).stem, "source": uploaded_file.name, "text": "", "pages": []}
 
     return {
         "doc_id": Path(uploaded_file.name).stem,
@@ -68,6 +74,7 @@ def clean_and_split_sentences(text: str) -> List[str]:
 
 
 def chunk_text(doc: Dict[str, Any], chunk_size: int = 120, overlap: int = 30) -> List[Dict[str, Any]]:
+    """Split document pages into overlapping chunks"""
     chunks, cid = [], 0
     for page in doc["pages"]:
         sentences = clean_and_split_sentences(page["text"]) if page["text"] else []
@@ -95,7 +102,8 @@ def build_vector_store(chunks: List[Dict[str, Any]], embedder: SentenceTransform
     texts = [c["text"] for c in chunks]
     if not texts:
         raise ValueError("No text chunks to index.")
-    embeddings = embedder.encode(texts, convert_to_numpy=True, show_progress_bar=False)
+
+    embeddings = embedder.encode(texts, batch_size=32, convert_to_numpy=True, show_progress_bar=False)
     faiss.normalize_L2(embeddings)
     dim = embeddings.shape[1]
     index = faiss.IndexFlatIP(dim)
@@ -119,46 +127,46 @@ def search(query: str, index: faiss.IndexFlat, texts: List[str], chunks: List[Di
     return results
 
 # --------------------------- Prompting ---------------------------
-def build_chat_messages(user_query: str, retrieved: List[Dict[str, Any]], history: List[Dict[str, str]], system_instruction: str = None) -> List[Dict[str, str]]:
-    context = "\n".join([f"- {r['text']}" for r in retrieved]) if retrieved else "No relevant context found."
+def build_chat_messages(user_query: str, retrieved: List[Dict[str, Any]], history: List[Dict[str, str]], system_instruction: str) -> List[Dict[str, str]]:
+    if retrieved:
+        context = "\n".join([f"- {r['text']}" for r in retrieved])
+    else:
+        context = "No relevant context found."
+
     hist = "\n".join([f"{m['role'].capitalize()}: {m['content']}" for m in history[-10:]])
 
-    default_system = (
-        "You are a helpful assistant that MUST answer strictly using the provided document context. "
-        "If the answer cannot be found in the context, say you don't know."
-    )
-
-    system_content = system_instruction if system_instruction else default_system
     user_prompt = (
         f"Chat History:\n{hist}\n\nDocument Context:\n{context}\n\nUser Question: {user_query}\n"
     )
 
     messages = [
-        {"role": "system", "content": system_content},
+        {"role": "system", "content": system_instruction},
         {"role": "user", "content": user_prompt},
     ]
     return messages
 
 # --------------------------- Generation ---------------------------
 def generate_with_chat_completion(messages: List[Dict[str, str]], hf_token: str, model_name: str, max_new_tokens: int = 300, temperature: float = 0.7) -> str:
-    os.environ["HUGGINGFACEHUB_API_TOKEN"] = hf_token
     client = InferenceClient(token=hf_token)
-
-    resp = client.chat.completions.create(
-        model=model_name,
-        messages=messages,
-        max_tokens=max_new_tokens,
-        temperature=temperature,
-    )
-
-    if hasattr(resp, "choices") and len(resp.choices) > 0:
-        return resp.choices[0].message.content.strip()
-    return "No response."
+    try:
+        resp = client.chat.completions.create(
+            model=model_name,
+            messages=messages,
+            max_tokens=max_new_tokens,
+            temperature=temperature,
+        )
+        if hasattr(resp, "choices") and len(resp.choices) > 0:
+            return resp.choices[0].message.content.strip()
+        return "⚠️ No response from model."
+    except Exception as e:
+        return f"❌ Generation failed: {e}"
 
 # --------------------------- RAG pipeline ---------------------------
-def rag_answer(user_query: str, index, texts, chunks, embedder, history, hf_token, model_name, top_k=3, max_new_tokens=300, temperature=0.7):
+def rag_answer(user_query: str, index, texts, chunks, embedder, history, hf_token, model_name, system_instruction, top_k=3, max_new_tokens=300, temperature=0.7):
     retrieved = search(user_query, index, texts, chunks, embedder, top_k=top_k)
-    messages = build_chat_messages(user_query, retrieved, history)
+    if not retrieved:
+        return "I couldn’t find anything related in your documents.", []
+    messages = build_chat_messages(user_query, retrieved, history, system_instruction)
     answer = generate_with_chat_completion(messages, hf_token, model_name, max_new_tokens, temperature)
     return answer, retrieved
 
@@ -183,10 +191,24 @@ with st.sidebar:
     top_k = st.slider("Top-K retrieved chunks", 1, 10, 3, 1)
     max_new_tokens = st.slider("Max new tokens", 64, 1024, 300, 16)
     temperature = st.slider("Temperature", 0.0, 1.5, 0.7, 0.1)
+
+    st.subheader("System Prompt")
+    system_instruction = st.text_area("Instruction for assistant", value=(
+        "You are a helpful assistant that MUST answer strictly using the provided document context. "
+        "If the answer cannot be found in the context, say you don't know."
+    ))
+
     show_sources = st.checkbox("Show retrieved chunks", value=True)
+
     if st.button("🧹 Reset chat"):
         st.session_state.chat_history = []
         st.success("Chat cleared.")
+
+    if st.session_state.chat_history:
+        if st.download_button("💾 Download transcript", 
+                              data="\n".join([f"{m['role'].capitalize()}: {m['content']}" for m in st.session_state.chat_history]),
+                              file_name="chat_transcript.txt"):
+            st.success("Transcript downloaded.")
 
 # --------------------------- Upload & Index ---------------------------
 uploaded_files = st.file_uploader("Upload one or more documents (PDF / DOCX / TXT)", type=["pdf", "docx", "txt"], accept_multiple_files=True)
@@ -205,7 +227,7 @@ if uploaded_files:
         st.session_state.texts = texts
         st.session_state.chunks = chunks
         st.session_state.vector_ready = True
-        st.success(f"Indexed {len(all_chunks)} chunks from {len(uploaded_files)} documents.")
+        st.success(f"✅ Indexed {len(all_chunks)} chunks from {len(uploaded_files)} documents.")
 
 # --------------------------- Chat UI ---------------------------
 for m in st.session_state.chat_history:
@@ -236,6 +258,7 @@ if user_msg:
                     st.session_state.chat_history,
                     hf_token,
                     model_name,
+                    system_instruction,
                     top_k=top_k,
                     max_new_tokens=max_new_tokens,
                     temperature=temperature,
