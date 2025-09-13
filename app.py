@@ -114,7 +114,6 @@ def build_vectorstore_langchain(chunks: List[Dict[str, Any]], embed_model_name: 
     vectorstore = FAISS.from_texts(texts, embeddings, metadatas=metadatas)
     return vectorstore
 
-# --------------------------- LangChain: build QA chain ---------------------------
 @st.cache_resource(show_spinner=False)
 def get_qa_chain(_vectorstore: FAISS, hf_token: str, model_name: str,
                  system_instruction: str, top_k: int,
@@ -122,6 +121,7 @@ def get_qa_chain(_vectorstore: FAISS, hf_token: str, model_name: str,
 
     retriever = _vectorstore.as_retriever(search_kwargs={"k": top_k})
 
+    # ✅ Use "conversational" task instead of "text-generation"
     llm = HuggingFaceEndpoint(
         repo_id=model_name,
         huggingfacehub_api_token=hf_token,
@@ -259,6 +259,7 @@ if user_msg:
                         # doc.page_content is the text chunk
                         content = getattr(doc, "page_content", str(doc))
                         st.markdown(f"**{i}. {source} · Page {page}**\n\n{content}")
+
 
 
 
