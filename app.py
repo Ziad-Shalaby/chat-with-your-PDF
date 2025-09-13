@@ -8,8 +8,8 @@ import streamlit as st
 import numpy as np
 from pypdf import PdfReader
 import docx
-from langchain.embeddings import SentenceTransformerEmbeddings
-from langchain.vectorstores import FAISS
+from langchain_community.embeddings import SentenceTransformerEmbeddings
+from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEndpoint
 from langchain.chains import RetrievalQA
 
@@ -217,3 +217,4 @@ if user_msg:
                         page = meta.get("page", "?")
                         content = getattr(doc, "page_content", str(doc))
                         st.markdown(f"**{i}. {source} · Page {page}**\n\n{content}")
+
