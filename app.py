@@ -3,15 +3,10 @@ import re
 from io import BytesIO
 from pathlib import Path
 from typing import List, Dict, Any
-
 import streamlit as st
 import numpy as np
-
-# Document parsing
 from pypdf import PdfReader
 import docx
-
-# LangChain pieces
 from langchain.schema import Document as LCDocument
 from langchain.embeddings import SentenceTransformerEmbeddings
 from langchain.vectorstores import FAISS
@@ -99,34 +94,16 @@ def chunk_text(doc: Dict[str, Any], chunk_size: int = 120, overlap: int = 30) ->
             start += step
     return chunks
 
-# --------------------------- LangChain: build vectorstore ---------------------------
-@st.cache_resource(show_spinner=False)
-def build_vectorstore_langchain(chunks: List[Dict[str, Any]], embed_model_name: str = "all-MiniLM-L6-v2"):
-    """
-    Convert chunks -> texts + metadatas, then build a FAISS vectorstore using
-    SentenceTransformerEmbeddings (no HF token required for embeddings).
-    """
-    if not chunks:
-        raise ValueError("No chunks provided to build the vectorstore.")
-
-    texts = [c["text"] for c in chunks]
-    metadatas = [
-        {"source": c["source"], "page": c.get("page", None), "doc_id": c["doc_id"], "chunk_id": c["id"]}
-        for c in chunks
-    ]
-
-    embeddings = SentenceTransformerEmbeddings(model_name=embed_model_name)
-    vectorstore = FAISS.from_texts(texts, embeddings, metadatas=metadatas)
-    return vectorstore
-
 # --------------------------- LangChain: build QA chain ---------------------------
 @st.cache_resource(show_spinner=False)
-def get_qa_chain(vectorstore: FAISS, hf_token: str, model_name: str, system_instruction: str, top_k: int, max_new_tokens: int, temperature: float):
+def get_qa_chain(_vectorstore: FAISS, hf_token: str, model_name: str,
+                 system_instruction: str, top_k: int,
+                 max_new_tokens: int, temperature: float):
     """
     Build a RetrievalQA chain using HuggingFaceHub LLM and the retriever from vectorstore.
     Cached to avoid rebuilding every query.
     """
-    retriever = vectorstore.as_retriever(search_kwargs={"k": top_k})
+    retriever = _vectorstore.as_retriever(search_kwargs={"k": top_k})
 
     # LLM wrapper using HuggingFaceHub
     llm = HuggingFaceHub(repo_id=model_name, huggingfacehub_api_token=hf_token, model_kwargs={
@@ -137,7 +114,8 @@ def get_qa_chain(vectorstore: FAISS, hf_token: str, model_name: str, system_inst
     # Simple prompt that instructs the model to use only provided context
     prompt_template = (
         system_instruction.strip()
-        + "\n\nCONTEXT:\n{context}\n\nQUESTION:\n{question}\n\nAnswer concisely using only the context. If answer not in the context, say you don't know."
+        + "\n\nCONTEXT:\n{context}\n\nQUESTION:\n{question}\n\nAnswer concisely using only the context. "
+          "If answer not in the context, say you don't know."
     )
     prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
 
