@@ -380,44 +380,49 @@ if uploaded_files:
                     
                     # Create RAG chain if token is available
                     if hf_token:
-                        llm = get_llm(model_name, hf_token, max_new_tokens, temperature)
-                        custom_prompt = get_custom_prompt()
-                        rag_chain = create_rag_chain(vector_store, llm, custom_prompt, top_k)
-                        
-                        st.session_state.rag_chain = rag_chain
-                        st.session_state.documents_ready = True
-                        st.session_state.total_chunks = len(documents)
-                        
-                        # Update processed files tracking
-                        file_info = {}
-                        for doc in documents:
-                            source = doc.metadata.get("source", "Unknown")
-                            file_type = doc.metadata.get("file_type", "unknown")
+                        try:
+                            llm = get_llm(model_name, hf_token, max_new_tokens, temperature)
+                            custom_prompt = get_custom_prompt()
+                            rag_chain = create_rag_chain(vector_store, llm, custom_prompt, top_k)
                             
-                            if source not in file_info:
-                                file_info[source] = {"type": file_type.upper(), "chunks": 0}
-                            file_info[source]["chunks"] += 1
+                            st.session_state.rag_chain = rag_chain
+                            st.session_state.documents_ready = True
+                            st.session_state.total_chunks = len(documents)
+                            
+                            # Update processed files tracking
+                            file_info = {}
+                            for doc in documents:
+                                source = doc.metadata.get("source", "Unknown")
+                                file_type = doc.metadata.get("file_type", "unknown")
+                                
+                                if source not in file_info:
+                                    file_info[source] = {"type": file_type.upper(), "chunks": 0}
+                                file_info[source]["chunks"] += 1
+                            
+                            st.session_state.processed_files = [
+                                {"name": source, "type": info["type"], "chunks": info["chunks"]}
+                                for source, info in file_info.items()
+                            ]
+                            
+                            # Success message
+                            st.success(f"✅ Successfully processed {len(documents)} chunks from {len(uploaded_files)} documents!")
+                            
+                            # Display statistics
+                            col1, col2, col3, col4 = st.columns(4)
+                            with col1:
+                                st.metric("📄 Documents", len(uploaded_files))
+                            with col2:
+                                st.metric("🧩 Chunks", len(documents))
+                            with col3:
+                                avg_chunk_size = sum(len(doc.page_content) for doc in documents) // len(documents)
+                                st.metric("📏 Avg Chunk Size", f"{avg_chunk_size} chars")
+                            with col4:
+                                total_chars = sum(len(doc.page_content) for doc in documents)
+                                st.metric("📊 Total Content", f"{total_chars:,} chars")
                         
-                        st.session_state.processed_files = [
-                            {"name": source, "type": info["type"], "chunks": info["chunks"]}
-                            for source, info in file_info.items()
-                        ]
-                        
-                        # Success message
-                        st.success(f"✅ Successfully processed {len(documents)} chunks from {len(uploaded_files)} documents!")
-                        
-                        # Display statistics
-                        col1, col2, col3, col4 = st.columns(4)
-                        with col1:
-                            st.metric("📄 Documents", len(uploaded_files))
-                        with col2:
-                            st.metric("🧩 Chunks", len(documents))
-                        with col3:
-                            avg_chunk_size = sum(len(doc.page_content) for doc in documents) // len(documents)
-                            st.metric("📏 Avg Chunk Size", f"{avg_chunk_size} chars")
-                        with col4:
-                            total_chars = sum(len(doc.page_content) for doc in documents)
-                            st.metric("📊 Total Content", f"{total_chars:,} chars")
+                        except Exception as llm_error:
+                            st.error(f"❌ Error setting up language model: {str(llm_error)}")
+                            st.info("Try selecting a different model or check your Hugging Face token permissions.")
                     
                     else:
                         st.error("❌ Hugging Face token not found in Streamlit secrets!")
