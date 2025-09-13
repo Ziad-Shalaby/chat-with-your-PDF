@@ -10,7 +10,7 @@ import docx
 from langchain.schema import Document as LCDocument
 from langchain.embeddings import SentenceTransformerEmbeddings
 from langchain.vectorstores import FAISS
-from langchain.llms import HuggingFaceHub
+from langchain_huggingface import HuggingFaceEndpoint
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 
@@ -140,11 +140,12 @@ def get_qa_chain(_vectorstore: FAISS, hf_token: str, model_name: str,
     prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
 
     qa_chain = RetrievalQA.from_chain_type(
-        llm=llm,
-        chain_type="stuff",
-        retriever=retriever,
-        return_source_documents=True,
-        chain_type_kwargs={"prompt": prompt}
+        llm = HuggingFaceEndpoint(
+        repo_id="mistralai/Mixtral-8x7B-Instruct-v0.1",
+        huggingfacehub_api_token=HUGGINGFACE_API_KEY,
+        task="text-generation",  # ✅ Add this
+        temperature=0.7,
+        max_new_tokens=512
     )
     return qa_chain
 
@@ -260,5 +261,6 @@ if user_msg:
                         # doc.page_content is the text chunk
                         content = getattr(doc, "page_content", str(doc))
                         st.markdown(f"**{i}. {source} · Page {page}**\n\n{content}")
+
 
 
