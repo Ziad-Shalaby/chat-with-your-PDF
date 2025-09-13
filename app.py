@@ -120,18 +120,21 @@ def get_qa_chain(_vectorstore: FAISS, hf_token: str, model_name: str,
                  system_instruction: str, top_k: int,
                  max_new_tokens: int, temperature: float):
     """
-    Build a RetrievalQA chain using HuggingFaceHub LLM and the retriever from vectorstore.
+    Build a RetrievalQA chain using HuggingFaceEndpoint LLM and the retriever from vectorstore.
     Cached to avoid rebuilding every query.
     """
     retriever = _vectorstore.as_retriever(search_kwargs={"k": top_k})
 
-    # LLM wrapper using HuggingFaceHub
-    llm = HuggingFaceHub(repo_id=model_name, huggingfacehub_api_token=hf_token, model_kwargs={
-        "temperature": temperature,
-        "max_new_tokens": max_new_tokens
-    })
+    # LLM wrapper using HuggingFaceEndpoint
+    llm = HuggingFaceEndpoint(
+        repo_id=model_name,
+        huggingfacehub_api_token=hf_token,
+        task="text-generation",   # ✅ Required
+        temperature=temperature,
+        max_new_tokens=max_new_tokens
+    )
 
-    # Simple prompt that instructs the model to use only provided context
+    # Simple prompt
     prompt_template = (
         system_instruction.strip()
         + "\n\nCONTEXT:\n{context}\n\nQUESTION:\n{question}\n\nAnswer concisely using only the context. "
@@ -140,13 +143,13 @@ def get_qa_chain(_vectorstore: FAISS, hf_token: str, model_name: str,
     prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
 
     qa_chain = RetrievalQA.from_chain_type(
-        llm = HuggingFaceEndpoint(
-        repo_id="mistralai/Mixtral-8x7B-Instruct-v0.1",
-        huggingfacehub_api_token=HUGGINGFACE_API_KEY,
-        task="text-generation",  # ✅ Add this
-        temperature=0.7,
-        max_new_tokens=512
+        llm=llm,
+        retriever=retriever,
+        chain_type="stuff",
+        chain_type_kwargs={"prompt": prompt},
+        return_source_documents=True
     )
+
     return qa_chain
 
 # --------------------------- Session State ---------------------------
